@@ -14,17 +14,19 @@ const int potPin = 32;
 const int pinPulsador = 2;
 const int servoPin = 4;
 
-// ---------- Objetos y variables ----------
+// ---------- Objetos ----------
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 Servo servo;
 WiFiServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
 String header;
 
-float distance;        // Distancia real
-float setpoint = 20.0; // Setpoint inicial
+// ---------- Variables ----------
+float distance;
+float setpoint = 20.0;
 int x1, x2, x3, x4, x5;
 bool ultimoEstadoBoton = HIGH;
+String modo = "wifi";  // "wifi" o "pot"
 
 // ---------- PID ----------
 float error, prev_error = 0;
@@ -32,9 +34,9 @@ float P, I, D, U;
 float I_term = 0;
 float T = 0.1;
 unsigned long t_prev = 0;
-float Kp = 1.5;
-float Ki = 0.1;
-float Kd = 0.4;
+float Kp = 2.7;
+float Ki = 0.2;
+float Kd = 0.8;
 
 // ---------- SETUP ----------
 void setup() {
@@ -43,7 +45,7 @@ void setup() {
 
   servo.setPeriodHertz(50);
   servo.attach(servoPin, 1000, 2000);
-  servo.write(110);  // Reposo
+  servo.write(110);
 
   if (!lox.begin()) {
     Serial.println(F("❌ VL53L0X no detectado"));
@@ -53,12 +55,10 @@ void setup() {
   WiFi.begin(ssid, password);
   Serial.print("Conectando a WiFi");
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+    delay(500); Serial.print(".");
   }
   Serial.println("\n✅ Conectado!");
-  Serial.print("IP: ");
-  Serial.println(WiFi.localIP());
+  Serial.print("IP: "); Serial.println(WiFi.localIP());
 
   server.begin();
   webSocket.begin();
@@ -72,7 +72,6 @@ void loop() {
 
   distance = MedirLaser();
 
-  // Ejecutar PID si hay distancia válida
   if (distance > 0) {
     unsigned long t_now = millis();
     if ((t_now - t_prev) >= T * 1000) {
@@ -83,15 +82,15 @@ void loop() {
     servo.write(110);
   }
 
-  // WebSocket: enviar distancia real
+  // Enviar distancia real
   static unsigned long lastSend = 0;
   if (millis() - lastSend > 200) {
     lastSend = millis();
     String mensaje = (distance <= 0) ? "Fuera de rango" : String(int(distance));
-    webSocket.broadcastTXT(mensaje);
+    webSocket.broadcastTXT("real:" + mensaje);
   }
 
-  // WebSocket: enviar valor del potenciómetro
+  // Enviar valor del potenciómetro
   static unsigned long lastPotSend = 0;
   if (millis() - lastPotSend > 300) {
     lastPotSend = millis();
@@ -99,16 +98,17 @@ void loop() {
     webSocket.broadcastTXT("analog:" + String(potValue));
   }
 
-  // Pulsador físico para cambiar setpoint
+  // Leer pulsador solo si está en modo "pot"
   bool estadoBoton = digitalRead(pinPulsador);
   if (ultimoEstadoBoton == HIGH && estadoBoton == LOW) {
-    Serial.println("🔘 Pulsador presionado");
+    Serial.println("🔘 Pulsador presionado (modo potenciómetro)");
     int potValue = MedirPot(true);
     setpoint = potValue;
+    Serial.println("✅ Setpoint actualizado desde potenciómetro: " + String(setpoint));
   }
   ultimoEstadoBoton = estadoBoton;
 
-  // Manejar slider HTTP
+  // Leer setpoint desde slider HTTP (modo WiFi)
   if (client) {
     String currentLine = "";
     while (client.connected()) {
@@ -122,17 +122,12 @@ void loop() {
             if (index >= 0) {
               int fin = header.indexOf(' ', index + 18);
               String valorStr = header.substring(index + 18, fin);
-              int distanciaRecibida = valorStr.toInt();
+              float distanciaRecibida = valorStr.toFloat();
 
-              Serial.println("====================================");
-              Serial.println("🌐 Valor recibido desde la web (slider):");
-              Serial.print("🔹 Distancia seleccionada: ");
-              Serial.print(distanciaRecibida);
-              setpoint=distanciaRecibida;
-              Serial.println(" cm");
-              Serial.println("====================================");
-
-              setpoint = distanciaRecibida;
+              if (modo == "wifi") {
+                setpoint = distanciaRecibida;
+                Serial.println("🌐 Setpoint actualizado desde slider HTTP: " + String(setpoint));
+              }
             }
 
             client.println("HTTP/1.1 200 OK");
@@ -175,13 +170,13 @@ int MedirPot(bool imprimir) {
   int dist = map(raw, 0, 4095, 0, 45);
   if (imprimir) {
     Serial.println("====================================");
-    Serial.println("🔵 Valor recibido desde potenciometro:");
-    Serial.print("🔹 Distancia seleccionada: ");
+    Serial.println("🔵 Valor leído del potenciómetro:");
+    Serial.print("🔹 Distancia: ");
     Serial.print(dist);
-    setpoint=dist;
     Serial.println(" cm");
     Serial.println("====================================");
   }
+  
   return dist;
 }
 
@@ -205,6 +200,7 @@ void ejecutarPID() {
 
   angulo = constrain(angulo, 50, 170);
   servo.write(angulo);
+
   prev_error = error;
 }
 
@@ -219,8 +215,17 @@ void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t leng
     Serial.printf("📨 Mensaje del cliente %u: %s\n", num, msg.c_str());
 
     if (msg == "wifi") {
-      int d = MedirPot(true);
-      setpoint = d;
+      modo = "wifi";
+      Serial.println("🌐 Modo cambiado a WiFi");
+    } else if (msg == "pot") {
+      modo = "pot";
+      Serial.println("🎚️ Modo cambiado a Potenciómetro");
+    } else if (msg.startsWith("enviarWifi")) {
+      if (modo == "wifi") {
+        int valor = msg.substring(10).toInt();
+        setpoint = valor;
+        Serial.println("✅ Setpoint actualizado desde WiFi: " + String(setpoint));
+      }
     }
   }
 }
