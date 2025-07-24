@@ -1,0 +1,230 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <title>Control de Distancias</title>
+  <style>
+    :root {
+      --bg-color: #f8f4f0;
+      --card-color: #fffefb;
+      --accent-color: #a68a64;
+      --text-color: #3e3e3e;
+      --border-color: #d8cfc4;
+      --shadow-color: rgba(0, 0, 0, 0.08);
+      --tab-active: #8c6f52;
+      --tab-inactive: #e6ddd3;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      font-family: 'Georgia', serif;
+      background-color: var(--bg-color);
+      color: var(--text-color);
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+    }
+
+    .card {
+      background-color: var(--card-color);
+      padding: 2rem 3rem;
+      border-radius: 20px;
+      box-shadow: 0 8px 20px var(--shadow-color);
+      border: 1px solid var(--border-color);
+      max-width: 800px;
+      width: 90%;
+      display: flex;
+      gap: 2rem;
+    }
+
+    .left, .right {
+      flex: 1;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      color: var(--accent-color);
+      margin-bottom: 1rem;
+    }
+
+    .tabs {
+      display: flex;
+      margin-bottom: 1rem;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--accent-color);
+    }
+
+    .tab {
+      flex: 1;
+      padding: 0.6rem 1rem;
+      text-align: center;
+      background-color: var(--tab-inactive);
+      cursor: pointer;
+      font-weight: bold;
+      transition: background-color 0.25s ease, color 0.25s ease;
+      color: var(--accent-color);
+    }
+
+    .tab.active {
+      background-color: var(--tab-active);
+      color: white;
+    }
+
+    label {
+      font-size: 1rem;
+      display: block;
+      margin-top: 1rem;
+      margin-bottom: 0.5rem;
+    }
+
+    input[type=range] {
+      width: 100%;
+      accent-color: var(--accent-color);
+    }
+
+    input[type=range]:disabled {
+      background: var(--tab-inactive);
+      border: 1px solid var(--accent-color);
+      cursor: not-allowed;
+    }
+
+    button {
+      margin-top: 1.5rem;
+      padding: 0.6rem 1.2rem;
+      font-size: 1rem;
+      background-color: var(--accent-color);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+
+    .distancia-real {
+      text-align: center;
+      font-size: 2.2rem;
+      color: var(--accent-color);
+      margin-top: 2rem;
+    }
+
+    .distancia-deseada {
+      text-align: center;
+      font-size: 1rem;
+      color: var(--text-color);
+      margin-top: 0.5rem;
+    }
+
+    footer {
+      margin-top: 2rem;
+      font-size: 0.8rem;
+      color: #aaa;
+      font-style: italic;
+      text-align: center;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="left">
+      <h1>Entrada de Distancia</h1>
+
+      <div class="tabs">
+        <div class="tab active" onclick="cambiarModo('wifi')">WiFi</div>
+        <div class="tab" onclick="cambiarModo('analogica')">Analógica</div>
+      </div>
+
+      <label for="slider">Selecciona la distancia (cm):</label>
+      <input type="range" min="5" max="45" value="25" id="slider" oninput="actualizarTexto()">
+      <p>Distancia seleccionada: <span id="valor">25</span> cm</p>
+
+      <button id="btn-enviar" onclick="enviarDistancia()">Enviar</button>
+    </div>
+
+    <div class="right">
+      <h1>Distancia Real</h1>
+      <div class="distancia-real" id="distancia-real">-- cm</div>
+      <div class="distancia-deseada">Deseada: <span id="setpoint">--</span> cm</div>
+    </div>
+  </div>
+
+  <footer>ESP32 - Natalia Andrea Dueñas Salamanca - Maria Fernanda Murillo</footer>
+
+  <script>
+    const ESP32_IP = "10.123.225.124";
+    let distancia = 25;
+    let modo = "wifi";
+    let socket;
+    const slider = document.getElementById("slider");
+    const valor = document.getElementById("valor");
+    const setpointSpan = document.getElementById("setpoint");
+    const btnEnviar = document.getElementById("btn-enviar");
+
+    function actualizarTexto() {
+      distancia = slider.value;
+      valor.innerText = distancia;
+    }
+
+    function enviarDistancia() {
+      const padded = distancia.toString().padStart(3, "0");
+      const url = `http://${ESP32_IP}/distanciaweb/${padded}`;
+      fetch(url);
+    }
+
+    function cambiarModo(nuevoModo) {
+      modo = nuevoModo;
+
+      const tabs = document.querySelectorAll('.tab');
+      tabs.forEach(tab => tab.classList.remove('active'));
+
+      if (modo === "wifi") {
+        tabs[0].classList.add("active");
+        slider.disabled = false;
+        btnEnviar.style.display = "inline-block";
+      } else {
+        tabs[1].classList.add("active");
+        slider.disabled = true;
+        btnEnviar.style.display = "none";
+      }
+    }
+
+    function iniciarWebSocket() {
+      socket = new WebSocket(`ws://${ESP32_IP}:81`);
+
+      socket.onmessage = function(event) {
+        const msg = event.data;
+
+        if (msg.startsWith("analog:")) {
+          const analogValue = parseInt(msg.split(":")[1]);
+          if (modo === "analogica") {
+            slider.value = analogValue;
+            valor.textContent = analogValue;
+            distancia = analogValue;
+          }
+        } else if (msg.startsWith("setpoint:")) {
+          const sp = parseInt(msg.split(":")[1]);
+          setpointSpan.textContent = sp;
+          if (modo === "analogica") {
+            slider.value = sp;
+            valor.textContent = sp;
+            distancia = sp;
+          }
+        } else {
+          document.getElementById("distancia-real").textContent = msg + " cm";
+        }
+      };
+
+      socket.onerror = function() {
+        document.getElementById("distancia-real").textContent = "Error de conexión";
+      };
+    }
+
+    window.onload = iniciarWebSocket;
+  </script>
+</body>
+</html>
