@@ -24,7 +24,6 @@ bool ultimoEstadoBoton = HIGH;  // Para detectar flanco de bajada
 // ---------- SETUP ----------
 void setup() {
   Serial.begin(115200);
-
   pinMode(pinPulsador, INPUT_PULLUP);  // Activar pull-up interno para el pulsador
 
   // Iniciar sensor láser
@@ -74,6 +73,7 @@ void loop() {
   // Detectar si se presionó el pulsador
   bool estadoBoton = digitalRead(pinPulsador);
   if (ultimoEstadoBoton == HIGH && estadoBoton == LOW) {
+    Serial.println("🔘 Pulsador presionado");
     int potValue = MedirPot(true);  // Con imprimir en consola
   }
   ultimoEstadoBoton = estadoBoton;
