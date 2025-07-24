@@ -2,32 +2,38 @@
 #include <WebSocketsServer.h>
 #include "Adafruit_VL53L0X.h"
 
+// ---------- CONFIG WiFi ----------
 const char *ssid = "Galaxy A52A281";
 const char *password = "0987654321";
 
-// Pines I2C
+// ---------- Pines ----------
 #define SDA 21
 #define SCL 22
+const int potPin = 32;
+const int pinPulsador = 2;
 
+// ---------- Variables ----------
 Adafruit_VL53L0X lox = Adafruit_VL53L0X();
 WiFiServer server(80);
 WebSocketsServer webSocket = WebSocketsServer(81);
-
 String header;
 float distanceReal;
 int x1, x2, x3, x4, x5;
-int x = 0;
+bool ultimoEstadoBoton = HIGH;  // Para detectar flanco de bajada
 
+// ---------- SETUP ----------
 void setup() {
   Serial.begin(115200);
 
-  // Inicializa sensor
+  pinMode(pinPulsador, INPUT_PULLUP);  // Activar pull-up interno para el pulsador
+
+  // Iniciar sensor láser
   if (!lox.begin()) {
     Serial.println(F("No se pudo inicializar VL53L0X"));
     while (1);
   }
 
-  // Conexión WiFi
+  // Conectar a WiFi
   WiFi.begin(ssid, password);
   Serial.print("Conectando a WiFi");
   while (WiFi.status() != WL_CONNECTED) {
@@ -38,17 +44,18 @@ void setup() {
   Serial.print("IP: ");
   Serial.println(WiFi.localIP());
 
-  // Servidores
+  // Iniciar servidores
   server.begin();
   webSocket.begin();
   webSocket.onEvent(onWebSocketEvent);
 }
 
+// ---------- LOOP PRINCIPAL ----------
 void loop() {
-  // Medir y enviar distancia cada 200 ms
-  distanceReal = MedirLaser();
   webSocket.loop();
+  distanceReal = MedirLaser();
 
+  // Enviar distancia real cada 200 ms
   static unsigned long lastSend = 0;
   if (millis() - lastSend > 200) {
     lastSend = millis();
@@ -56,7 +63,22 @@ void loop() {
     webSocket.broadcastTXT(mensaje);
   }
 
-  // Atender solicitudes HTTP
+  // Enviar valor del potenciómetro cada 300 ms
+  static unsigned long lastPotSend = 0;
+  if (millis() - lastPotSend > 300) {
+    lastPotSend = millis();
+    int potValue = MedirPot(false);  // Solo para enviar, sin imprimir
+    webSocket.broadcastTXT("analog:" + String(potValue));
+  }
+
+  // Detectar si se presionó el pulsador
+  bool estadoBoton = digitalRead(pinPulsador);
+  if (ultimoEstadoBoton == HIGH && estadoBoton == LOW) {
+    int potValue = MedirPot(true);  // Con imprimir en consola
+  }
+  ultimoEstadoBoton = estadoBoton;
+
+  // Manejar solicitud HTTP desde slider
   WiFiClient client = server.available();
   if (client) {
     String currentLine = "";
@@ -67,14 +89,18 @@ void loop() {
 
         if (c == '\n') {
           if (currentLine.length() == 0) {
-            // Detectar ruta: /distanciaweb/<valor>
             int index = header.indexOf("GET /distanciaweb/");
             if (index >= 0) {
               int fin = header.indexOf(' ', index + 18);
               String valorStr = header.substring(index + 18, fin);
               int distanciaRecibida = valorStr.toInt();
-              Serial.print("Distancia WiFi recibida: ");
-              Serial.println(distanciaRecibida);
+
+              Serial.println("====================================");
+              Serial.println("🔵 Valor recibido desde la web (slider):");
+              Serial.print("🔹 Distancia seleccionada: ");
+              Serial.print(distanciaRecibida);
+              Serial.println(" cm");
+              Serial.println("====================================");
             }
 
             // Responder al navegador
@@ -97,23 +123,40 @@ void loop() {
   }
 }
 
-// ------------------- SENSOR VL53L0X ----------------------
+// ---------- FUNCIONES ----------
+
+double MedirPot(bool imprimir) {
+  int rawValue = analogRead(potPin);
+  float distancia = map(rawValue, 0, 4095, 0, 45);
+  distancia = int(distancia);  // redondear
+
+  if (imprimir) {
+    Serial.println("====================================");
+    Serial.println("🔵 Valor recibido desde potenciometro:");
+    Serial.print("🔹 Distancia seleccionada: ");
+    Serial.print(distancia);
+    Serial.println(" cm");
+    Serial.println("====================================");
+  }
+
+  return distancia;
+}
+
 double MedirLaser() {
   VL53L0X_RangingMeasurementData_t measure;
   lox.rangingTest(&measure, false);
 
   x5 = x4; x4 = x3; x3 = x2; x2 = x1; x1 = measure.RangeMilliMeter;
-  x = (x1 + x2 + x3 + x4 + x5) / 5;
+  int x = (x1 + x2 + x3 + x4 + x5) / 5;
 
   distanceReal = 0.1002 * x - 3.4301;
-  if (distanceReal > 6) distanceReal = 0.0939 * x - 2.301;
+  if (distanceReal > 6)  distanceReal = 0.0939 * x - 2.301;
   if (distanceReal > 20) distanceReal = 0.0939 * x - 1.9301;
   if (measure.RangeStatus == 4 || distanceReal >= 40) distanceReal = -1;
 
   return distanceReal;
 }
 
-// ------------------- EVENTOS WEBSOCKET ----------------------
 void onWebSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length) {
   if (type == WStype_CONNECTED) {
     IPAddress ip = webSocket.remoteIP(num);
